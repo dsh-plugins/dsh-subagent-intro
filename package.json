@@ -1,5 +1,5 @@
 {
-  "name": "dsh-subagent-intro",
+  "name": "@dsh-plugin/dsh-subagent-intro",
   "version": "0.1.0",
   "description": "在子代理工具说明之前向系统提示词注入可配置的子代理模型介绍段落。",
   "license": "MIT",

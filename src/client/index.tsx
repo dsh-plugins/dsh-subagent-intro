@@ -37,7 +37,7 @@ const SETTINGS_SLOT = 'settings.plugins.tab'
 const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
 
 /** 本插件的包名，同时是 bundle 配置插槽的 key。 */
-const PACKAGE_NAME = 'dsh-subagent-intro'
+const PACKAGE_NAME = '@dsh-plugin/dsh-subagent-intro'
 
 /** 输入防抖时长，单位毫秒。 */
 const SAVE_DELAY = 400
@@ -153,7 +153,7 @@ const OPTIONAL_MODEL_FIELDS = new Set<keyof ModelDraft>(['provider', 'name'])
 
 const EMPTY_MODEL: ModelDraft = { model: '', provider: '', name: '', ability: '', scenario: '', timing: '' }
 
-export const name = 'dsh-subagent-intro'
+export const name = '@dsh-plugin/dsh-subagent-intro'
 
 /** 设置页需要插槽与配置表单两个浏览器端服务。 */
 export const inject = ['slots', 'configForms', 'remote', 'remote.session']
@@ -601,7 +601,7 @@ function SubagentIntroSettings(props: {
       if (cancelled) return
       // 目录不可用时只影响下拉提示，因此只提示而不阻断表单。
       setCatalogError(error instanceof Error ? error.message : String(error))
-      console.error('[dsh-subagent-intro] 读取模型目录失败', error)
+      console.error('[@dsh-plugin/dsh-subagent-intro] 读取模型目录失败', error)
     })
     return () => { cancelled = true }
   }, [loadCatalog])
@@ -641,7 +641,7 @@ function SubagentIntroSettings(props: {
       const accepted = await form.mutate(ops)
       if (!accepted) {
         const reason = '宿主拒绝了这次写入；配置可能已在别处被修改，页面已重新读取宿主值。'
-        console.error('[dsh-subagent-intro] 配置写入被宿主拒绝', ops)
+        console.error('[@dsh-plugin/dsh-subagent-intro] 配置写入被宿主拒绝', ops)
         if (mounted.current) {
           setSave({ kind: 'failed', reason })
           // 只有最新一次写入失败才丢弃草稿：较早的失败若也清空草稿，
@@ -653,7 +653,7 @@ function SubagentIntroSettings(props: {
       if (mounted.current && seq === writeSeq.current) setSave({ kind: 'saved' })
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      console.error('[dsh-subagent-intro] 配置写入失败', error)
+      console.error('[@dsh-plugin/dsh-subagent-intro] 配置写入失败', error)
       if (mounted.current) {
         setSave({ kind: 'failed', reason })
         // 与拒绝分支同理：过期失败不得丢弃仍在编辑的草稿。

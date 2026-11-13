@@ -27,7 +27,7 @@ export default {
   },
   outputOptions: {
     entryFileNames: 'client.js',
-    banner: 'window.__ModuleLoader__.load({ id: "dsh-subagent-intro", factory: (require) => {',
+    banner: 'window.__ModuleLoader__.load({ id: "@dsh-plugin/dsh-subagent-intro", factory: (require) => {',
     footer: 'return module.exports; } });',
     intro: 'var module = { exports: {} }; var exports = module.exports;',
     codeSplitting: false,
