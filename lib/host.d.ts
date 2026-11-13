@@ -17,11 +17,25 @@ export interface HeaderConfig {
     readonly model: string;
     readonly reasoningEffort?: string;
 }
+/** 一条已持久化的会话事件，本插件只读取类型与数据。 */
+export interface SessionEventLike {
+    readonly type: string;
+    readonly data: unknown;
+}
+/** 会话表面：请求实际发送的消息序列。 */
+export interface SessionSurface {
+    /** 当前表面上保留的事件序号，按模型可见顺序排列。 */
+    readonly nodes: readonly number[];
+}
 export interface SessionLike {
     /** 该会话上一次实际发出的请求头；从未请求时为 undefined。 */
     requestHeader(): {
         readonly config: HeaderConfig;
     } | undefined;
+    /** 请求实际发送的消息序列。 */
+    readonly surface: SessionSurface;
+    /** 按序号读取单个事件；序号不在日志中时返回 undefined。 */
+    eventAt(seq: number): SessionEventLike | undefined;
 }
 export interface AgentLike {
     readonly session: SessionLike;
