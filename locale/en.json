@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Subagent model introduction",
+    "description": "Inject a configurable introduction of subagent models before the subagent tool description in the system prompt."
+  }
+}

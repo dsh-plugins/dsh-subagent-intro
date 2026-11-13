@@ -1,0 +1,6 @@
+# 依赖目录不入库。
+node_modules/
+
+# lib/ 是构建产物，但故意提交入库：从 Git 源安装插件时，
+# 若依赖 prepare 现场构建，pnpm 默认会拦截构建脚本并要求用户授权；
+# 提交已构建产物后 `dsh plugin add github:dsh-plugins/<name>` 可直接使用。

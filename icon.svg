@@ -1,0 +1,13 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="dsh_subagent_intro_bubble" x1="12" y1="10" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#658EFF"/>
+      <stop offset="1" stop-color="#4561EE"/>
+    </linearGradient>
+  </defs>
+  <path d="M14 10H50C53.314 10 56 12.686 56 16V38C56 41.314 53.314 44 50 44H32L22 54V44H14C10.686 44 8 41.314 8 38V16C8 12.686 10.686 10 14 10Z" fill="url(#dsh_subagent_intro_bubble)"/>
+  <rect x="17" y="18" width="30" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.95"/>
+  <rect x="17" y="26" width="22" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.72"/>
+  <rect x="17" y="34" width="26" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.48"/>
+  <circle cx="48" cy="36" r="4" fill="#A797FC"/>
+</svg>
