@@ -1,5 +1,5 @@
 /**
- * 设置页客户端：在 DSH Web 设置面板的「插件」分页中编辑本插件的 profile 配置。
+ * 浏览器端客户端：在 DSH Web 的插件详情页编辑本插件的 profile 配置。
  *
  * 配置读写全部经由宿主提供的 `configForms` 服务：读取走 `getSnapshot()` 与
  * `subscribe()`，写入走 `mutate()` 的路径操作。组件不直接接触任何 `@deepseek-ai/*`
@@ -12,7 +12,7 @@ import type { CSSProperties, ReactElement } from 'react'
 import type { ModelIntro } from '../config.js'
 
 /**
- * 设置页读到的配置是宿主投影后的裸值，不含宿主端的 `Volatile` 包装，
+ * 插件详情页读到的配置是宿主投影后的裸值，不含宿主端的 `Volatile` 包装，
  * 因此这里单独声明一份纯数据类型，不复用 `src/config.ts` 的 `Config`。
  */
 interface EditableConfig {
@@ -25,14 +25,11 @@ interface EditableConfig {
 /** 本插件在 profile 中的条目 id，同时是设置命名空间 key。 */
 const NAMESPACE = 'subagent-intro'
 
-/** 设置面板「插件」分页的页内插槽。 */
-const SETTINGS_SLOT = 'settings.plugins.tab'
-
 /**
  * 插件管理页中本 Bundle 详情页的配置插槽。
  *
- * 该插槽按包名寻址，占用后详情页才会出现配置区；只注册 settings.plugins.tab 时，
- * 用户在插件详情页看不到任何配置入口。
+ * 该插槽按包名寻址，占用后详情页才会出现配置区。配置只挂在这里，不再往
+ * 设置面板的「插件」分页塞一个标签页，避免与内置插件的浏览列表挤在一起。
  */
 const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
 
@@ -155,11 +152,11 @@ const EMPTY_MODEL: ModelDraft = { model: '', provider: '', name: '', ability: ''
 
 export const name = '@dsh-plugin/dsh-subagent-intro'
 
-/** 设置页需要插槽与配置表单两个浏览器端服务。 */
+/** 插件详情页需要插槽、配置表单与远端模型目录三个浏览器端服务。 */
 export const inject = ['slots', 'configForms', 'remote', 'remote.session']
 
 /**
- * 挂载设置页。
+ * 挂载插件详情页的配置区。
  *
  * @param ctx - 浏览器端插件上下文。
  */
@@ -181,14 +178,6 @@ export function apply(ctx: Context): void {
     })))
   }
   const page = () => <SubagentIntroSettings form={form} loadCatalog={loadCatalog} />
-  // 设置页与插件详情页各注册一次，两处都能直接编辑同一份配置。
-  ctx.effect(
-    () => ctx.slots.inject(SETTINGS_SLOT, () => ctx.slots.register(
-      { name: SETTINGS_SLOT, id: 'subagent-intro', order: 0, label: () => '子代理介绍' },
-      page,
-    )),
-    'subagent-intro:settings-page',
-  )
   ctx.effect(
     () => ctx.slots.inject(BUNDLE_CONFIG_SLOT, () => ctx.slots.register(
       { name: BUNDLE_CONFIG_SLOT, key: PACKAGE_NAME },
@@ -231,7 +220,7 @@ function modelToJson(model: ModelDraft): Record<string, unknown> {
 /**
  * 页面根容器样式。
  *
- * 宽度交给宿主容器决定：插件详情页与设置页的可用宽度不同，自设 maxWidth
+ * 宽度交给宿主容器决定，自设 maxWidth
  * 会在宽屏下留下一大片空白，也会让长文本字段过早截断。
  */
 const pageStyle: CSSProperties = {
@@ -577,10 +566,10 @@ function TextField(props: {
 }
 
 /**
- * 设置页主体。
+ * 配置区主体。
  *
- * 同一组件挂在两个插槽上：设置页分页只渲染表单，插件详情页会传入 `view`，
- * 其中 `summary` 只应给出简短摘要。
+ * 宿主按 `view` 区分用途：详情页请求 `page` 时才渲染完整表单，
+ * `summary` 只用于列表或折叠摘要，这里不需要给出简写版本。
  */
 function SubagentIntroSettings(props: {
   form: ConfigForm<EditableConfig>
