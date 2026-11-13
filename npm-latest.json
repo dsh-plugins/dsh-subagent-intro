@@ -1,0 +1,10 @@
+{
+  "name": "@dsh-plugin/dsh-subagent-intro",
+  "latest": "0.0.1",
+  "publishedAt": "2026-11-13T17:29:44.888Z",
+  "dist": {
+    "tarball": "https://registry.npmjs.org/@dsh-plugin/dsh-subagent-intro/-/dsh-subagent-intro-0.0.1.tgz",
+    "integrity": "sha512-TEU96tD9fBOnWJYCiAl2jg61qB2+CR77EqzIRgbVj4yxN5AHmwUPC2Dx5kFxZ2VrFBUr0sipsMqOj3tXnGVmBg==",
+    "unpackedSize": 64195
+  }
+}
