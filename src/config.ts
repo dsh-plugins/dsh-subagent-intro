@@ -1,5 +1,6 @@
 import type { Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { DEFAULT_TOOL_NAMES } from './portable.js'
 
 /** 一条子代理模型的介绍条目，全部由用户配置提供。 */
 export interface ModelIntro {
@@ -24,9 +25,6 @@ export interface ResolvedConfig {
   readonly intro: string
   readonly models: readonly ModelIntro[]
 }
-
-/** 默认的子代理创建工具名。 */
-export const DEFAULT_TOOL_NAMES: readonly string[] = ['subagent', 'subagent_fork']
 
 /**
  * 插件配置。

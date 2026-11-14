@@ -8,8 +8,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { CSSProperties, ReactElement } from 'react'
+import type { ChangeEvent, CSSProperties, ReactElement } from 'react'
 import type { ModelIntro } from '../config.js'
+import type { PortableConfig } from '../portable.js'
+import { parsePortable, serializePortable } from '../portable.js'
 
 /**
  * 插件详情页读到的配置是宿主投影后的裸值，不含宿主端的 `Volatile` 包装，
@@ -38,6 +40,9 @@ const PACKAGE_NAME = '@dsh-plugin/dsh-subagent-intro'
 
 /** 输入防抖时长，单位毫秒。 */
 const SAVE_DELAY = 400
+
+/** 下载文件名前缀。 */
+const FILE_PREFIX = 'subagent-intro'
 
 /** 一条路径对命名空间内某个字段的写入，与宿主 `SettingsPathOpView` 同形。 */
 type PathOp =
@@ -144,10 +149,22 @@ type SaveState =
   | { kind: 'saved' }
   | { kind: 'failed'; reason: string }
 
-/** 新增条目时写入宿主的空条目，必填字段先落空串由用户补齐。 */
+/** 导入导出的操作反馈；成功或失败都保留到下一次导入导出操作覆盖。 */
+interface TransferNote {
+  tone: 'success' | 'error'
+  text: string
+}
+
+/** 已解析、等待用户确认的导入内容。 */
+interface StagedImport {
+  config: PortableConfig
+  source: string
+}
+
 /** 可省略字段：留空时应 unset 而不是写入空串，与重排时的整体写回保持一致。 */
 const OPTIONAL_MODEL_FIELDS = new Set<keyof ModelDraft>(['provider', 'name'])
 
+/** 新增条目时写入宿主的空条目，必填字段先落空串由用户补齐。 */
 const EMPTY_MODEL: ModelDraft = { model: '', provider: '', name: '', ability: '', scenario: '', timing: '' }
 
 export const name = '@dsh-plugin/dsh-subagent-intro'
@@ -215,6 +232,109 @@ function modelToJson(model: ModelDraft): Record<string, unknown> {
   if (model.name.trim() !== '') json.name = model.name
   if (model.provider.trim() !== '') json.provider = model.provider
   return json
+}
+
+/**
+ * 把编辑期草稿转成可导出文档的配置主体。
+ *
+ * 导出的是屏幕上的当前内容，含尚未落盘的编辑，因此这里原样搬运字段；可选字段的
+ * 省略规则集中在 {@link serializePortable}，避免两处判断不一致。
+ */
+function toPortable(draft: Draft): PortableConfig {
+  return {
+    toolNames: [...draft.toolNames],
+    intro: draft.intro,
+    announce: draft.announce,
+    models: draft.models.map(model => ({
+      model: model.model,
+      provider: model.provider,
+      name: model.name,
+      ability: model.ability,
+      scenario: model.scenario,
+      timing: model.timing,
+    })),
+  }
+}
+
+/** 把导入的配置主体转成编辑期草稿，可选字段统一补空串。 */
+function fromPortable(config: PortableConfig): Draft {
+  return {
+    toolNames: [...config.toolNames],
+    intro: config.intro,
+    announce: config.announce,
+    models: config.models.map(model => ({
+      model: model.model,
+      provider: model.provider ?? '',
+      name: model.name ?? '',
+      ability: model.ability,
+      scenario: model.scenario,
+      timing: model.timing,
+    })),
+  }
+}
+
+/**
+ * 导入预览文案：在写入前说明这次替换的规模，避免一次误粘贴直接清空条目。
+ *
+ * @param config - 已解析的导入内容。
+ * @returns 一行用分号分隔的摘要。
+ */
+function describeImport(config: PortableConfig): string {
+  const ids = config.models
+    .map(model => model.model.trim())
+    .filter(id => id !== '')
+  const models = config.models.length === 0
+    ? '无模型条目'
+    : `${config.models.length} 条模型条目（${ids.length === 0 ? '模型 id 均为空' : ids.join('、')}）`
+  const intro = config.intro.trim() === '' ? '总述为空' : `总述 ${config.intro.length} 字`
+  const tools = config.toolNames.length === 0
+    ? '工具名列表为空，本段将不再注入'
+    : `工具名 ${config.toolNames.join('、')}`
+  return [models, intro, tools, `适用声明头${config.announce ? '开启' : '关闭'}`].join('；')
+}
+
+/** 下载文件名中的时间戳：本地时间，精确到秒。 */
+function timeStamp(date: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+    + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+/** 触发一次浏览器下载，等浏览器取走 blob 后释放对象 URL。 */
+function downloadFile(name: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = name
+  anchor.style.display = 'none'
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  // 点击是同步返回的，浏览器可能在下一个任务才真正取走 blob，因此延后释放。
+  window.setTimeout(() => { URL.revokeObjectURL(url) }, 0)
+}
+
+/** 写入剪贴板；页面未提供剪贴板接口时抛出带原因的错误。 */
+async function writeClipboard(text: string): Promise<void> {
+  const clipboard = navigator.clipboard as Clipboard | undefined
+  if (clipboard === undefined || typeof clipboard.writeText !== 'function') {
+    throw new Error('当前页面没有可用的剪贴板写入接口')
+  }
+  await clipboard.writeText(text)
+}
+
+/** 读取剪贴板文本；接口缺失同样抛出带原因的错误。 */
+async function readClipboard(): Promise<string> {
+  const clipboard = navigator.clipboard as Clipboard | undefined
+  if (clipboard === undefined || typeof clipboard.readText !== 'function') {
+    throw new Error('当前页面没有可用的剪贴板读取接口')
+  }
+  return await clipboard.readText()
+}
+
+/** 取出异常的可读说明。 */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -606,6 +726,13 @@ function SubagentIntroSettings(props: {
   /** 在途写入全部结算后自增，用于触发草稿与宿主值的重新对齐。 */
   const [settled, setSettled] = useState(0)
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
+  /** 导入导出的操作反馈；成功或失败都保留到下一次导入导出操作覆盖。 */
+  const [note, setNote] = useState<TransferNote | null>(null)
+  /** 已解析待确认的导入内容；null 表示没有待确认项。 */
+  const [staged, setStaged] = useState<StagedImport | null>(null)
+  /** 导入写入是否在途；在途期间禁用全部导入控件，避免覆盖尚未落定的那次导入。 */
+  const [applying, setApplying] = useState(false)
+  const fileInput = useRef<HTMLInputElement | null>(null)
 
   const queue = useRef(new Map<string, PathOp>())
   const timer = useRef<number | null>(null)
@@ -619,9 +746,14 @@ function SubagentIntroSettings(props: {
   /** 渲染用的有效草稿：用户编辑优先，否则跟随宿主值。 */
   const view: Draft | null = override ?? (external === undefined ? null : toDraft(external))
 
-  /** 立即发出写入，并把失败原因留在页面状态区。 */
-  const write = useCallback(async (ops: PathOp[]): Promise<void> => {
-    if (ops.length === 0) return
+  /**
+   * 立即发出写入，并把失败原因留在页面状态区。
+   *
+   * @param ops - 按顺序应用的路径操作。
+   * @returns 宿主是否接受了这次写入；供需要据此决定后续动作的调用方使用。
+   */
+  const write = useCallback(async (ops: PathOp[]): Promise<boolean> => {
+    if (ops.length === 0) return true
     const seq = writeSeq.current + 1
     writeSeq.current = seq
     inflight.current += 1
@@ -637,9 +769,10 @@ function SubagentIntroSettings(props: {
           // 会把用户在这期间继续输入的内容一起抹掉。
           if (seq === writeSeq.current) setOverride(null)
         }
-        return
+        return false
       }
       if (mounted.current && seq === writeSeq.current) setSave({ kind: 'saved' })
+      return true
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       console.error('[@dsh-plugin/dsh-subagent-intro] 配置写入失败', error)
@@ -648,6 +781,7 @@ function SubagentIntroSettings(props: {
         // 与拒绝分支同理：过期失败不得丢弃仍在编辑的草稿。
         if (seq === writeSeq.current) setOverride(null)
       }
+      return false
     } finally {
       inflight.current -= 1
       if (inflight.current === 0) setSettled(count => count + 1)
@@ -816,6 +950,120 @@ function SubagentIntroSettings(props: {
     commit([{ op: 'set', path: ['announce'], value: checked }])
   }
 
+  /** 当前表单的导出文本；取草稿而非宿主快照，保证复制/下载到的就是屏幕上看到的内容。 */
+  const exportText = (): string => serializePortable(toPortable(view), new Date().toISOString())
+
+  const copyConfig = async (): Promise<void> => {
+    try {
+      await writeClipboard(exportText())
+      if (mounted.current) setNote({ tone: 'success', text: '配置已复制到剪贴板。' })
+    } catch (error) {
+      console.error('[@dsh-plugin/dsh-subagent-intro] 写入剪贴板失败', error)
+      if (!mounted.current) return
+      setNote({ tone: 'error', text: `复制失败：${describeError(error)}。可以改用「下载 JSON 文件」。` })
+    }
+  }
+
+  const saveConfig = (): void => {
+    const fileName = `${FILE_PREFIX}-${timeStamp(new Date())}.json`
+    try {
+      downloadFile(fileName, exportText())
+      setNote({ tone: 'success', text: `已下载 ${fileName}。` })
+    } catch (error) {
+      console.error('[@dsh-plugin/dsh-subagent-intro] 生成下载失败', error)
+      setNote({ tone: 'error', text: `下载失败：${describeError(error)}` })
+    }
+  }
+
+  /** 解析一段导入文本；解析失败时清掉上一份待确认项，避免误应用旧内容。 */
+  const stageImport = (text: string, source: string): void => {
+    const result = parsePortable(text)
+    if (!result.ok) {
+      console.warn(`[@dsh-plugin/dsh-subagent-intro] 无法解析${source}中的配置：${result.error}`)
+      setStaged(null)
+      setNote({ tone: 'error', text: `无法解析来源（${source}）中的配置：${result.error}` })
+      return
+    }
+    setStaged({ config: result.config, source })
+    setNote(null)
+  }
+
+  const importFromClipboard = async (): Promise<void> => {
+    try {
+      const text = await readClipboard()
+      if (!mounted.current) return
+      if (text.trim() === '') {
+        setNote({ tone: 'error', text: '剪贴板里没有文本内容。' })
+        return
+      }
+      stageImport(text, '剪贴板')
+    } catch (error) {
+      console.error('[@dsh-plugin/dsh-subagent-intro] 读取剪贴板失败', error)
+      if (!mounted.current) return
+      setNote({ tone: 'error', text: `读取剪贴板失败：${describeError(error)}。可以改用「选择 JSON 文件」。` })
+    }
+  }
+
+  const importFromFile = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    // 事件对象在 await 之后不再持有当前输入框，先取下来。
+    const input = event.currentTarget
+    const file = input.files?.[0]
+    if (file === undefined) {
+      console.warn('[@dsh-plugin/dsh-subagent-intro] 文件选择事件没有携带文件')
+      return
+    }
+    let text: string
+    try {
+      text = await file.text()
+    } catch (error) {
+      console.error('[@dsh-plugin/dsh-subagent-intro] 读取导入文件失败', error)
+      if (mounted.current) setNote({ tone: 'error', text: `读取文件失败：${describeError(error)}` })
+      return
+    } finally {
+      // 清空选择，便于连续导入同一个文件。
+      input.value = ''
+    }
+    if (!mounted.current) return
+    stageImport(text, `文件「${file.name}」`)
+  }
+
+  /**
+   * 应用待确认的导入内容：一次写入四个顶层字段，避免宿主看到中间态。
+   *
+   * 写入成功才收起待导入项；失败时保留它，可直接重试同一份内容——要换内容需先
+   * 放弃，再重新粘贴或选择文件。
+   */
+  const applyImport = async (): Promise<void> => {
+    if (staged === null || applying) return
+    const draft = fromPortable(staged.config)
+    setOverride(draft)
+    // 队列里尚未提交的防抖编辑会被这次整体写入覆盖，先取消以免发出无用请求。
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current)
+      timer.current = null
+    }
+    queue.current.clear()
+    setApplying(true)
+    let accepted = false
+    try {
+      accepted = await write([
+        { op: 'set', path: ['toolNames'], value: draft.toolNames },
+        { op: 'set', path: ['intro'], value: draft.intro },
+        { op: 'set', path: ['announce'], value: draft.announce },
+        { op: 'set', path: ['models'], value: draft.models.map(modelToJson) },
+      ])
+    } finally {
+      if (mounted.current) setApplying(false)
+    }
+    if (!mounted.current) return
+    if (accepted) {
+      setStaged(null)
+      setNote({ tone: 'success', text: '已应用导入的配置。' })
+    } else {
+      setNote({ tone: 'error', text: '导入未写入：宿主拒绝了这次写入或写入失败，原因见页面上方的保存状态。' })
+    }
+  }
+
   return (
     <div style={pageStyle}>
       <div>
@@ -964,6 +1212,68 @@ function SubagentIntroSettings(props: {
           />
           <span>在段落开头输出「仅适用于当前会话配置」的声明</span>
         </label>
+      </section>
+
+      <section style={cardStyle}>
+        <h3 style={cardTitleStyle}>导入 / 导出</h3>
+        <p style={statusStyle}>
+          导出把当前表单写成一份 JSON 文档，可用于备份或迁移到另一份 profile。导入会整体替换总述、模型条目、工具名与适用声明头，粘贴或选择文件后先预览，确认后才写入。
+        </p>
+        <div style={rowStyle}>
+          <button type="button" style={buttonStyle} onClick={() => { void copyConfig() }}>复制到剪贴板</button>
+          <button type="button" style={buttonStyle} onClick={saveConfig}>下载 JSON 文件</button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={disabled || applying}
+            onClick={() => { void importFromClipboard() }}
+          >从剪贴板导入</button>
+          <button
+            type="button"
+            style={buttonStyle}
+            disabled={disabled || applying}
+            onClick={() => { fileInput.current?.click() }}
+          >选择 JSON 文件…</button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            style={{ display: 'none' }}
+            onChange={(event) => { void importFromFile(event) }}
+          />
+        </div>
+        {staged !== null && (
+          <div style={cardStyle}>
+            <p style={{ ...statusStyle, color: 'var(--dsw-alias-label-secondary)' }}>
+              待导入（来源：{staged.source}）：{describeImport(staged.config)}
+            </p>
+            <div style={rowStyle}>
+              <button
+                type="button"
+                style={buttonStyle}
+                disabled={disabled || applying}
+                onClick={() => { void applyImport() }}
+              >{applying ? '应用中…' : '应用导入'}</button>
+              <button
+                type="button"
+                style={buttonStyle}
+                disabled={applying}
+                onClick={() => { setStaged(null); setNote(null) }}
+              >放弃</button>
+            </div>
+          </div>
+        )}
+        {note !== null && (
+          <p
+            role={note.tone === 'error' ? 'alert' : 'status'}
+            style={{
+              ...statusStyle,
+              color: note.tone === 'error'
+                ? 'var(--dsw-alias-state-error-primary)'
+                : 'var(--dsw-alias-state-success-primary)',
+            }}
+          >{note.text}</p>
+        )}
       </section>
     </div>
   )

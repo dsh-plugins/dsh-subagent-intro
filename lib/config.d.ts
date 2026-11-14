@@ -22,8 +22,6 @@ export interface ResolvedConfig {
     readonly intro: string;
     readonly models: readonly ModelIntro[];
 }
-/** 默认的子代理创建工具名。 */
-export declare const DEFAULT_TOOL_NAMES: readonly string[];
 /**
  * 插件配置。
  *
