@@ -1,0 +1,11 @@
+{
+  "name": {
+    "en": "Subagent introductions",
+    "zh-CN": "子代理介绍"
+  },
+  "desc": {
+    "en": "Saves the introduction text, tool names, and model descriptions for the profile.",
+    "zh-CN": "保存当前配置档的介绍文本、工具名称和模型说明。"
+  },
+  "paths": ["profiles/<profile>/config/dsh-subagent-intro/config.json"]
+}
