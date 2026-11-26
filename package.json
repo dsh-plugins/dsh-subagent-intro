@@ -34,7 +34,10 @@
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "inject": [
+        "@dsh-plugin/dsh-loader"
+      ]
     }
   },
   "scripts": {
@@ -43,13 +46,16 @@
     "test": "node --test test/*.test.ts"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.19.0"
+    "@deepseek-ai/schemastery": "^3.19.0",
+    "yaml": "^2.9.1"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.1.0"
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@dsh-plugin/dsh-loader": "^2.0.0-dev.45572825995"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.1.0",
+    "@dsh-plugin/dsh-loader": "2.0.0-dev.45572825995",
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",

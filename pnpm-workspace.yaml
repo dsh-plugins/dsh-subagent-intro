@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - '@dsh-plugin/dsh-loader@2.0.0-dev.45572825995'

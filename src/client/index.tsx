@@ -1,97 +1,13 @@
-/**
- * 浏览器端客户端：在 DSH Web 的插件详情页编辑本插件的 profile 配置。
- *
- * 配置读写全部经由宿主提供的 `configForms` 服务：读取走 `getSnapshot()` 与
- * `subscribe()`，写入走 `mutate()` 的路径操作。组件不直接接触任何 `@deepseek-ai/*`
- * 运行期模块，只依赖 React 与宿主注入的 Cordis 服务。
- */
-
 import type { Context } from '@deepseek-ai/cordis'
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { ConfigPanelProps, DshLoaderUi } from '@dsh-plugin/dsh-loader/client'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties, ReactElement } from 'react'
-import type { ModelIntro } from '../config.js'
 import type { PortableConfig } from '../portable.js'
 import { parsePortable, serializePortable } from '../portable.js'
 
-/**
- * 插件详情页读到的配置是宿主投影后的裸值，不含宿主端的 `Volatile` 包装，
- * 因此这里单独声明一份纯数据类型，不复用 `src/config.ts` 的 `Config`。
- */
-interface EditableConfig {
-  toolNames?: string[]
-  intro?: string
-  models?: ModelIntro[]
-  announce?: boolean
-}
-
-/** 本插件在 profile 中的条目 id，同时是设置命名空间 key。 */
-const NAMESPACE = 'subagent-intro'
-
-/**
- * 插件管理页中本 Bundle 详情页的配置插槽。
- *
- * 该插槽按包名寻址，占用后详情页才会出现配置区。配置只挂在这里，不再往
- * 设置面板的「插件」分页塞一个标签页，避免与内置插件的浏览列表挤在一起。
- */
-const BUNDLE_CONFIG_SLOT = 'plugins.bundle.config'
-
-/** 本插件的包名，同时是 bundle 配置插槽的 key。 */
-const PACKAGE_NAME = '@dsh-plugin/dsh-subagent-intro'
-
-/** 输入防抖时长，单位毫秒。 */
+const CONFIG_ID = 'dsh-subagent-intro'
 const SAVE_DELAY = 400
-
-/** 下载文件名前缀。 */
 const FILE_PREFIX = 'subagent-intro'
-
-/** 一条路径对命名空间内某个字段的写入，与宿主 `SettingsPathOpView` 同形。 */
-type PathOp =
-  | { op: 'set'; path: string[]; value: unknown }
-  | { op: 'unset'; path: string[] }
-
-/** 命名空间快照，字段语义与宿主 `ConfigFormSnapshot` 一致。 */
-interface ConfigFormSnapshot<T> {
-  status: 'loading' | 'ready' | 'unavailable'
-  value: T | undefined
-  base: unknown
-  user: unknown
-  revision: number | undefined
-  writable: boolean
-}
-
-/** 单个命名空间的配置表单。 */
-interface ConfigForm<T> {
-  getSnapshot(): ConfigFormSnapshot<T>
-  subscribe(listener: () => void): () => void
-  mutate(ops: readonly PathOp[], expectedRevision?: number): Promise<boolean>
-  set(field: string, value: unknown): Promise<boolean>
-  unset(field: string): Promise<boolean>
-}
-
-/** 插槽注册选项，只声明本插件用到的字段。 */
-/** 列表型插槽的注册项：按 id 占位，可选 label 与排序。 */
-interface ListSlotRegistration {
-  name: string
-  id: string
-  order?: number
-  label?: string | (() => string)
-}
-
-/** 键控插槽的注册项：按 key 寻址，占用后由宿主按该键下发渲染。 */
-interface KeyedSlotRegistration {
-  name: string
-  key: string
-  order?: number
-  label?: string | (() => string)
-}
-
-type SlotRegistration = ListSlotRegistration | KeyedSlotRegistration
-
-/** 插槽服务，只声明本插件用到的两个方法。 */
-interface SlotsService {
-  inject(name: string, register: () => () => void): () => void
-  register(options: SlotRegistration, component: () => ReactElement | null): () => void
-}
 
 /** 模型目录中的一个候选：provider 与模型 id 成对出现。 */
 interface CatalogModel {
@@ -118,8 +34,6 @@ type ModelCatalogResult =
 /** 宿主在浏览器端补齐的 Cordis 服务。 */
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    slots: SlotsService
-    configForms: { get<T>(entryId: string): ConfigForm<T> }
     remote: { session: { modelCatalog(): Promise<ModelCatalogResult> } }
   }
 }
@@ -161,32 +75,24 @@ interface StagedImport {
   source: string
 }
 
-/** 可省略字段：留空时应 unset 而不是写入空串，与重排时的整体写回保持一致。 */
-const OPTIONAL_MODEL_FIELDS = new Set<keyof ModelDraft>(['provider', 'name'])
+/** 一批连续编辑共用一个修订号，只有成功写入才能推进该修订号。 */
+interface PendingEdits {
+  revision: number
+  draft: Draft
+}
 
-/** 新增条目时写入宿主的空条目，必填字段先落空串由用户补齐。 */
 const EMPTY_MODEL: ModelDraft = { model: '', provider: '', name: '', ability: '', scenario: '', timing: '' }
 
 export const name = '@dsh-plugin/dsh-subagent-intro'
+export const inject = ['dshLoaderUi', 'remote', 'remote.session']
 
-/** 插件详情页需要插槽、配置表单与远端模型目录三个浏览器端服务。 */
-export const inject = ['slots', 'configForms', 'remote', 'remote.session']
-
-/**
- * 挂载插件详情页的配置区。
- *
- * @param ctx - 浏览器端插件上下文。
- */
-export function apply(ctx: Context): void {
-  const form = ctx.configForms.get<EditableConfig>(NAMESPACE)
-  /**
-   * 读取宿主模型目录，展平成「provider + 模型」候选列表。
-   *
-   * 目录只作为填写辅助：拉到就用下拉提示，拉不到时退化为手工输入，不阻塞编辑。
-   */
+/** 将编辑区挂到配置卡片，并从宿主模型目录提供可选条目。 */
+export function apply(ctx: Context & { dshLoaderUi: Pick<DshLoaderUi, 'config'> }): void {
   const loadCatalog = async (): Promise<CatalogModel[]> => {
     const response = await ctx.remote.session.modelCatalog()
-    if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`)
+    if (!response.ok) {
+      throw new Error(`${response.error.code}: ${response.error.message}`)
+    }
     return response.value.groups.flatMap(group => group.models.map(model => ({
       provider: group.id,
       providerName: group.name,
@@ -194,81 +100,25 @@ export function apply(ctx: Context): void {
       name: model.name,
     })))
   }
-  const page = () => <SubagentIntroSettings form={form} loadCatalog={loadCatalog} />
-  ctx.effect(
-    () => ctx.slots.inject(BUNDLE_CONFIG_SLOT, () => ctx.slots.register(
-      { name: BUNDLE_CONFIG_SLOT, key: PACKAGE_NAME },
-      page,
-    )),
-    'subagent-intro:bundle-config',
+  ctx.dshLoaderUi.config.registerPanel(
+    { effect: register => ctx.effect(() => register() ?? []) },
+    {
+      configId: CONFIG_ID,
+      id: 'editor',
+      component: ({ view, client }) => <SubagentIntroSettings snapshot={view} client={client} loadCatalog={loadCatalog} />,
+    },
   )
 }
 
-/** 把宿主配置转成编辑期草稿，缺省字段补空值。 */
-function toDraft(config: EditableConfig): Draft {
-  return {
-    toolNames: [...config.toolNames ?? []],
-    intro: config.intro ?? '',
-    announce: config.announce ?? true,
-    models: (config.models ?? []).map(model => ({
-      model: model.model,
-      provider: model.provider ?? '',
-      name: model.name ?? '',
-      ability: model.ability,
-      scenario: model.scenario,
-      timing: model.timing,
-    })),
-  }
-}
-
-/** 把草稿条目还原成待写入的 JSON；可选字段留空时不写入，避免存下空串覆盖缺省语义。 */
-function modelToJson(model: ModelDraft): Record<string, unknown> {
-  const json: Record<string, unknown> = {
-    model: model.model,
-    ability: model.ability,
-    scenario: model.scenario,
-    timing: model.timing,
-  }
-  if (model.name.trim() !== '') json.name = model.name
-  if (model.provider.trim() !== '') json.provider = model.provider
-  return json
-}
-
-/**
- * 把编辑期草稿转成可导出文档的配置主体。
- *
- * 导出的是屏幕上的当前内容，含尚未落盘的编辑，因此这里原样搬运字段；可选字段的
- * 省略规则集中在 {@link serializePortable}，避免两处判断不一致。
- */
-function toPortable(draft: Draft): PortableConfig {
-  return {
-    toolNames: [...draft.toolNames],
-    intro: draft.intro,
-    announce: draft.announce,
-    models: draft.models.map(model => ({
-      model: model.model,
-      provider: model.provider,
-      name: model.name,
-      ability: model.ability,
-      scenario: model.scenario,
-      timing: model.timing,
-    })),
-  }
-}
-
-/** 把导入的配置主体转成编辑期草稿，可选字段统一补空串。 */
-function fromPortable(config: PortableConfig): Draft {
+function toDraft(config: PortableConfig): Draft {
   return {
     toolNames: [...config.toolNames],
     intro: config.intro,
     announce: config.announce,
     models: config.models.map(model => ({
-      model: model.model,
+      ...model,
       provider: model.provider ?? '',
       name: model.name ?? '',
-      ability: model.ability,
-      scenario: model.scenario,
-      timing: model.timing,
     })),
   }
 }
@@ -352,20 +202,7 @@ const pageStyle: CSSProperties = {
   color: 'var(--dsw-alias-label-primary)',
 }
 
-/** 标题与说明。 */
-const titleStyle: CSSProperties = { margin: 0, fontSize: 18, fontWeight: 600, lineHeight: '26px' }
 const introStyle: CSSProperties = { margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-tertiary)' }
-
-/** 占位与提示块。 */
-const noticeStyle: CSSProperties = {
-  margin: 0,
-  padding: '10px 12px',
-  fontSize: 13,
-  lineHeight: '20px',
-  borderRadius: 'var(--dsw-radius-lg)',
-  background: 'var(--dsw-alias-bg-module-platform)',
-  color: 'var(--dsw-alias-label-secondary)',
-}
 
 /** 卡片容器。 */
 const cardStyle: CSSProperties = {
@@ -685,21 +522,11 @@ function TextField(props: {
   )
 }
 
-/**
- * 配置区主体。
- *
- * 宿主按 `view` 区分用途：详情页请求 `page` 时才渲染完整表单，
- * `summary` 只用于列表或折叠摘要，这里不需要给出简写版本。
- */
-function SubagentIntroSettings(props: {
-  form: ConfigForm<EditableConfig>
-  /** 读取宿主模型目录；失败时下拉退化为手工输入。 */
+function SubagentIntroSettings({ snapshot, client, loadCatalog }: {
+  snapshot: ConfigPanelProps['view']
+  client: ConfigPanelProps['client']
   loadCatalog: () => Promise<CatalogModel[]>
-  view?: 'summary' | 'page'
-}): ReactElement | null {
-  const { form, loadCatalog } = props
-  if (props.view === 'summary') return null
-
+}): ReactElement {
   const [catalog, setCatalog] = useState<CatalogModel[] | null>(null)
   const [catalogError, setCatalogError] = useState<string | null>(null)
   useEffect(() => {
@@ -715,243 +542,186 @@ function SubagentIntroSettings(props: {
     return () => { cancelled = true }
   }, [loadCatalog])
 
-  const subscribe = useCallback((listener: () => void) => form.subscribe(listener), [form])
-  const getSnapshot = useCallback(() => form.getSnapshot(), [form])
-  // 第三个参数是服务端快照：本插件只在浏览器挂载，但传上它可让组件在
-  // 任何服务端渲染通路下正常工作，而不是抛 Missing getServerSnapshot。
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-
-  /** 用户尚未提交的编辑；null 表示直接采用宿主值。 */
+  const [lastSaved, setLastSaved] = useState(snapshot)
   const [override, setOverride] = useState<Draft | null>(null)
-  /** 在途写入全部结算后自增，用于触发草稿与宿主值的重新对齐。 */
-  const [settled, setSettled] = useState(0)
   const [save, setSave] = useState<SaveState>({ kind: 'idle' })
-  /** 导入导出的操作反馈；成功或失败都保留到下一次导入导出操作覆盖。 */
   const [note, setNote] = useState<TransferNote | null>(null)
-  /** 已解析待确认的导入内容；null 表示没有待确认项。 */
   const [staged, setStaged] = useState<StagedImport | null>(null)
-  /** 导入写入是否在途；在途期间禁用全部导入控件，避免覆盖尚未落定的那次导入。 */
   const [applying, setApplying] = useState(false)
   const fileInput = useRef<HTMLInputElement | null>(null)
-
-  const queue = useRef(new Map<string, PathOp>())
   const timer = useRef<number | null>(null)
-  const writeSeq = useRef(0)
+  const pending = useRef<PendingEdits | null>(null)
+  const writes = useRef(Promise.resolve(true))
   const mounted = useRef(true)
-  /** 尚未结算的写入数；大于零时宿主快照仍落后于草稿。 */
-  const inflight = useRef(0)
 
-  const external = snapshot.value
-  const writable = snapshot.writable
-  /** 渲染用的有效草稿：用户编辑优先，否则跟随宿主值。 */
-  const view: Draft | null = override ?? (external === undefined ? null : toDraft(external))
+  const current = lastSaved.revision > snapshot.revision ? lastSaved : snapshot
+  // 配置服务已按本插件注册的模板校验这一份快照。
+  const external = current.value as typeof current.value & PortableConfig
+  const view = override ?? toDraft(external)
+  const disabled = applying
 
-  /**
-   * 立即发出写入，并把失败原因留在页面状态区。
-   *
-   * @param ops - 按顺序应用的路径操作。
-   * @returns 宿主是否接受了这次写入；供需要据此决定后续动作的调用方使用。
-   */
-  const write = useCallback(async (ops: PathOp[]): Promise<boolean> => {
-    if (ops.length === 0) return true
-    const seq = writeSeq.current + 1
-    writeSeq.current = seq
-    inflight.current += 1
-    if (mounted.current) setSave({ kind: 'saving' })
-    try {
-      const accepted = await form.mutate(ops)
-      if (!accepted) {
-        const reason = '宿主拒绝了这次写入；配置可能已在别处被修改，页面已重新读取宿主值。'
-        console.error('[@dsh-plugin/dsh-subagent-intro] 配置写入被宿主拒绝', ops)
-        if (mounted.current) {
-          setSave({ kind: 'failed', reason })
-          // 只有最新一次写入失败才丢弃草稿：较早的失败若也清空草稿，
-          // 会把用户在这期间继续输入的内容一起抹掉。
-          if (seq === writeSeq.current) setOverride(null)
-        }
-        return false
-      }
-      if (mounted.current && seq === writeSeq.current) setSave({ kind: 'saved' })
-      return true
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error)
-      console.error('[@dsh-plugin/dsh-subagent-intro] 配置写入失败', error)
-      if (mounted.current) {
-        setSave({ kind: 'failed', reason })
-        // 与拒绝分支同理：过期失败不得丢弃仍在编辑的草稿。
-        if (seq === writeSeq.current) setOverride(null)
-      }
-      return false
-    } finally {
-      inflight.current -= 1
-      if (inflight.current === 0) setSettled(count => count + 1)
-    }
-  }, [form])
-
-  /** 取消防抖并立刻提交队列中的操作，可附加一批结构性操作。 */
-  const commit = useCallback((structural: PathOp[] = []): void => {
+  const cancelTimer = useCallback((): void => {
     if (timer.current !== null) {
       window.clearTimeout(timer.current)
       timer.current = null
     }
-    const ops = [...queue.current.values(), ...structural]
-    queue.current.clear()
-    void write(ops)
-  }, [write])
-
-  /** 排队一条操作并延迟写出；同一路径的连续编辑只保留最后一次。 */
-  const enqueue = useCallback((op: PathOp): void => {
-    queue.current.set(op.path.join('\u0000'), op)
-    if (timer.current !== null) window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => {
-      timer.current = null
-      commit()
-    }, SAVE_DELAY)
-  }, [commit])
-
-  /** 组件卸载前补发尚未到期的写入，避免最后一次编辑丢失。 */
-  const commitRef = useRef(commit)
-  commitRef.current = commit
-  useEffect(() => () => {
-    mounted.current = false
-    commitRef.current()
   }, [])
 
-  /**
-   * 草稿与宿主快照同步：待写操作、防抖计时器与在途写入都清空后，让宿主值接管。
-   *
-   * 这里刻意不把"是否有焦点"算进来：弹出层关闭时焦点元素会被移除，浏览器
-   * 不一定补发 blur，用焦点计数会让草稿永久停留在旧值上。真正的保护来自
-   * 队列与在途写入本身。
-   */
-  useEffect(() => {
-    if (override === null) return
-    if (queue.current.size > 0 || timer.current !== null || inflight.current > 0) return
-    setOverride(null)
-  }, [override, external, settled])
+  const commit = useCallback((): Promise<boolean> => {
+    cancelTimer()
+    const batch = pending.current
+    if (batch === null) {
+      return Promise.resolve(false)
+    }
+    const draft = batch.draft
+    const write = writes.current.then(async () => {
+      if (pending.current !== batch) {
+        return false
+      }
+      if (mounted.current) {
+        setSave({ kind: 'saving' })
+      }
+      try {
+        const saved = await client.update(CONFIG_ID, {
+          ...draft,
+          models: draft.models.map(model => ({
+            ...model,
+            name: model.name.trim() === '' ? '' : model.name,
+            provider: model.provider.trim() === '' ? '' : model.provider,
+          })),
+        }, batch.revision)
+        batch.revision = saved.revision
+        if (mounted.current) {
+          setLastSaved(saved)
+        }
+        if (batch.draft === draft) {
+          pending.current = null
+          if (mounted.current) {
+            setOverride(null)
+            setSave({ kind: 'saved' })
+          }
+        }
+        return true
+      } catch (error) {
+        const reason = describeError(error)
+        console.error('[@dsh-plugin/dsh-subagent-intro] 配置写入失败', error)
+        if (mounted.current) {
+          try {
+            const latest = await client.read(CONFIG_ID)
+            if (mounted.current) {
+              setLastSaved(latest)
+            }
+          } catch (readError) {
+            console.error('[@dsh-plugin/dsh-subagent-intro] 重新读取配置失败', readError)
+          }
+        }
+        // 这一批编辑基于同一份配置，后续写入继承失败结果，防止覆盖其他页面的修改。
+        cancelTimer()
+        pending.current = null
+        if (mounted.current) {
+          setOverride(null)
+          setSave({ kind: 'failed', reason })
+        }
+        return false
+      }
+    })
+    writes.current = write
+    return write
+  }, [cancelTimer, client])
 
-  if (snapshot.status !== 'ready' || view === null) {
-    return (
-      <div style={pageStyle}>
-        <h2 style={titleStyle}>子代理介绍</h2>
-        <p style={noticeStyle}>
-          {snapshot.status === 'unavailable'
-            ? '配置尚未就绪：宿主没有提供 subagent-intro 这个配置项，请确认插件已安装并启用。'
-            : '配置尚未就绪：正在读取宿主配置…'}
-        </p>
-      </div>
-    )
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      if (timer.current !== null) {
+        void commit()
+      }
+    }
+  }, [commit])
+
+  const edit = (change: (draft: Draft) => Draft): void => {
+    const batch = pending.current ?? { revision: current.revision, draft: view }
+    batch.draft = change(batch.draft)
+    pending.current = batch
+    setOverride(batch.draft)
   }
 
-  const disabled = !writable
+  const update = (change: (draft: Draft) => Draft, immediate = false): void => {
+    edit(change)
+    if (immediate) {
+      void commit()
+    } else {
+      cancelTimer()
+      timer.current = window.setTimeout(() => { void commit() }, SAVE_DELAY)
+    }
+  }
 
-  /**
-   * 基于最新草稿更新。
-   *
-   * 不能用渲染期捕获的 `view` 直接 `setOverride({ ...view, ... })`：同一事件里
-   * 连续调用多次时，React 批处理会让每次都用同一份旧值，后一次把前一次的
-   * 修改覆盖掉（点选模型时同时写 model 与 provider 就会丢一半）。
-   * @param change - 接收最新草稿并返回下一份草稿。
-   */
-  const mutateDraft = useCallback((change: (draft: Draft) => Draft): void => {
-    setOverride((previous) => {
-      const base = previous ?? (external === undefined ? null : toDraft(external))
-      return base === null ? previous : change(base)
-    })
-  }, [external])
-
-  const updateIntro = (text: string): void => {
-    mutateDraft(draft => ({ ...draft, intro: text }))
-    enqueue({ op: 'set', path: ['intro'], value: text })
+  const updateIntro = (intro: string): void => {
+    update(draft => ({ ...draft, intro }))
   }
 
   const updateModel = (index: number, field: keyof ModelDraft, text: string): void => {
-    mutateDraft((draft) => {
-      const models = draft.models.map((model, at) => (at === index ? { ...model, [field]: text } : model))
-      return { ...draft, models }
-    })
-    // 可选字段留空表示"未填写"，写成 unset 才会移除覆盖；
-    // 若写成 set ''，重排时的整体写回会省略该键，两条路径的语义就不一致了。
-    const path = ['models', String(index), field]
-    if (OPTIONAL_MODEL_FIELDS.has(field) && text.trim() === '') enqueue({ op: 'unset', path })
-    else enqueue({ op: 'set', path, value: text })
+    update(draft => ({
+      ...draft,
+      models: draft.models.map((model, at) => (at === index ? { ...model, [field]: text } : model)),
+    }))
   }
 
-  /**
-   * 应用一次模型目录点选。
-   *
-   * 三步改动合成一次草稿更新与一次整体写入：分多次写既会因旧快照丢改动，
-   * 也会让宿主看到中间态。
-   * @param index - 条目下标。
-   * @param picked - 选中的目录条目。
-   */
   const pickModel = (index: number, picked: CatalogModel): void => {
-    const models = view.models.map((model, at) => (at === index
-      ? {
-        ...model,
-        model: picked.id,
-        provider: picked.provider,
-        // 展示名留空才补目录名称，用户已填写的保留。
-        name: model.name.trim() === '' ? picked.name : model.name,
-      }
-      : model))
-    setOverride({ ...view, models })
-    const pickedModel = models[index]
-    if (pickedModel === undefined) return
-    // 整体替换该条目：先刷出队列里针对同一字段的旧编辑，再以本条覆盖。
-    commit([{ op: 'set', path: ['models', String(index)], value: modelToJson(pickedModel) }])
+    update(draft => ({
+      ...draft,
+      models: draft.models.map((model, at) => (at === index
+        ? {
+          ...model,
+          model: picked.id,
+          provider: picked.provider,
+          name: model.name.trim() === '' ? picked.name : model.name,
+        }
+        : model)),
+    }), true)
   }
 
   const addModel = (): void => {
-    const index = view.models.length
-    mutateDraft(draft => ({ ...draft, models: [...draft.models, { ...EMPTY_MODEL }] }))
-    commit([{
-      op: 'set',
-      path: ['models', String(index)],
-      value: { model: '', ability: '', scenario: '', timing: '' },
-    }])
+    update(draft => ({ ...draft, models: [...draft.models, { ...EMPTY_MODEL }] }), true)
   }
 
   const removeModel = (index: number): void => {
-    mutateDraft(draft => ({ ...draft, models: draft.models.filter((_model, at) => at !== index) }))
-    commit([{ op: 'unset', path: ['models', String(index)] }])
+    update(draft => ({ ...draft, models: draft.models.filter((_model, at) => at !== index) }), true)
   }
 
   const moveModel = (index: number, delta: number): void => {
     const target = index + delta
-    if (target < 0 || target >= view.models.length) return
-    const models = [...view.models]
-    const [moved] = models.splice(index, 1)
-    models.splice(target, 0, moved)
-    setOverride({ ...view, models })
-    commit([{ op: 'set', path: ['models'], value: models.map(modelToJson) }])
+    if (target < 0 || target >= view.models.length) {
+      return
+    }
+    update(draft => {
+      const models = [...draft.models]
+      const [moved] = models.splice(index, 1)
+      models.splice(target, 0, moved)
+      return { ...draft, models }
+    }, true)
   }
 
   const updateToolName = (index: number, text: string): void => {
-    const toolNames = view.toolNames.map((toolName, at) => (at === index ? text : toolName))
-    mutateDraft(draft => ({ ...draft, toolNames }))
-    enqueue({ op: 'set', path: ['toolNames'], value: toolNames })
+    update(draft => ({
+      ...draft,
+      toolNames: draft.toolNames.map((toolName, at) => (at === index ? text : toolName)),
+    }))
   }
 
   const addToolName = (): void => {
-    const toolNames = [...view.toolNames, '']
-    mutateDraft(draft => ({ ...draft, toolNames }))
-    commit([{ op: 'set', path: ['toolNames'], value: toolNames }])
+    update(draft => ({ ...draft, toolNames: [...draft.toolNames, ''] }), true)
   }
 
   const removeToolName = (index: number): void => {
-    const toolNames = view.toolNames.filter((_toolName, at) => at !== index)
-    mutateDraft(draft => ({ ...draft, toolNames }))
-    commit([{ op: 'set', path: ['toolNames'], value: toolNames }])
+    update(draft => ({ ...draft, toolNames: draft.toolNames.filter((_toolName, at) => at !== index) }), true)
   }
 
-  const toggleAnnounce = (checked: boolean): void => {
-    mutateDraft(draft => ({ ...draft, announce: checked }))
-    commit([{ op: 'set', path: ['announce'], value: checked }])
+  const toggleAnnounce = (announce: boolean): void => {
+    update(draft => ({ ...draft, announce }), true)
   }
 
-  /** 当前表单的导出文本；取草稿而非宿主快照，保证复制/下载到的就是屏幕上看到的内容。 */
-  const exportText = (): string => serializePortable(toPortable(view), new Date().toISOString())
+  const exportText = (): string => serializePortable(view, new Date().toISOString())
 
   const copyConfig = async (): Promise<void> => {
     try {
@@ -1027,33 +797,15 @@ function SubagentIntroSettings(props: {
     stageImport(text, `文件「${file.name}」`)
   }
 
-  /**
-   * 应用待确认的导入内容：一次写入四个顶层字段，避免宿主看到中间态。
-   *
-   * 写入成功才收起待导入项；失败时保留它，可直接重试同一份内容——要换内容需先
-   * 放弃，再重新粘贴或选择文件。
-   */
   const applyImport = async (): Promise<void> => {
-    if (staged === null || applying) return
-    const draft = fromPortable(staged.config)
-    setOverride(draft)
-    // 队列里尚未提交的防抖编辑会被这次整体写入覆盖，先取消以免发出无用请求。
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current)
-      timer.current = null
+    if (staged === null || applying) {
+      return
     }
-    queue.current.clear()
+    edit(() => toDraft(staged.config))
     setApplying(true)
-    let accepted = false
-    try {
-      accepted = await write([
-        { op: 'set', path: ['toolNames'], value: draft.toolNames },
-        { op: 'set', path: ['intro'], value: draft.intro },
-        { op: 'set', path: ['announce'], value: draft.announce },
-        { op: 'set', path: ['models'], value: draft.models.map(modelToJson) },
-      ])
-    } finally {
-      if (mounted.current) setApplying(false)
+    const accepted = await commit()
+    if (mounted.current) {
+      setApplying(false)
     }
     if (!mounted.current) return
     if (accepted) {
@@ -1067,15 +819,10 @@ function SubagentIntroSettings(props: {
   return (
     <div style={pageStyle}>
       <div>
-        <h2 style={titleStyle}>子代理介绍</h2>
-        <p style={introStyle}>下面的内容决定注入系统提示词的子代理介绍段落。修改会自动写入 profile 配置，由宿主按配置模式校验。</p>
+        <p style={introStyle}>修改会自动保存到当前 profile。下一轮请求使用更新后的子代理介绍。</p>
       </div>
 
       <SaveStatus state={save} />
-
-      {disabled
-        ? <p style={noticeStyle}>当前配置文档不可写（只读或缺少写入权限），所有控件已禁用；请检查 profile 的写入权限。</p>
-        : null}
 
       <label style={{ ...labelStyle, gap: 6 }}>
         <span>总述（intro）</span>

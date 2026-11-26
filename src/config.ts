@@ -27,11 +27,9 @@ export interface ResolvedConfig {
 }
 
 /**
- * 插件配置。
+ * 升级前的 Cordis YAML 配置，供迁移读取。
  *
- * 四个字段都标了 volatile：设置页只能编辑 volatile 字段，非 volatile 的条目
- * 不会被写进配置镜像，页面对应的命名空间也不会出现在配置镜像里。
- * 字段值在运行时是带 `get()` 的包装，因此接口用 {@link Volatile} 标注。
+ * 保留 volatile 包装，便于在清理旧配置时让宿主原地更新条目。
  */
 export interface Config {
   /** 判定“当前作用域拥有子代理创建工具”的工具名，默认 `['subagent', 'subagent_fork']`。 */
@@ -72,7 +70,6 @@ export const Config: z<Config> = z.object({
 /**
  * 把可缺省配置补齐为固定形状。
  *
- * 每次装配重新调用，因此设置页写入的值在下一轮请求即生效，无需重启。
  * @param config - 插件配置；volatile 字段取当前值。
  * @returns 渲染与判定共用的固定形状配置。
  */

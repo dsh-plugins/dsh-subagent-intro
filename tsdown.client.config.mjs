@@ -7,6 +7,7 @@ const CLIENT_EXTERNALS = [
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
+  '@dsh-plugin/dsh-loader/client',
 ]
 
 export default {

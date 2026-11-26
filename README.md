@@ -1,6 +1,6 @@
 # dsh-subagent-intro
 
-子代理用哪个模型，是由当前会话里的模型自己决定的，而它对候选模型的了解全部来自提示词。工具说明只给出参数格式，`list_subagent_models` 只返回路由列表，都不包含各个模型的强项与分工。这个插件在系统提示词的子代理工具说明之前注入一段可配置的模型介绍，把每个候选模型擅长什么、什么场景下该选它直接写进上下文。配置可在 Web 的插件详情页编辑，也可写入 profile 的 YAML。
+子代理用哪个模型，是由当前会话里的模型自己决定的，而它对候选模型的了解全部来自提示词。工具说明只给出参数格式，`list_subagent_models` 只返回路由列表，都不包含各个模型的强项与分工。这个插件在系统提示词的子代理工具说明之前注入一段可配置的模型介绍，把每个候选模型擅长什么、什么场景下该选它直接写进上下文。配置可在 Web 的插件详情页编辑，保存在当前 profile 的 JSON 文件中。
 
 ## 功能
 
@@ -17,6 +17,8 @@
 | 导入导出 | 在插件详情页把当前配置复制到剪贴板或下载为 JSON 文件；粘贴或选择文件后先预览，确认后整体导入 |
 
 ## 安装
+
+先在同一 Web profile 中安装并启用 `@dsh-plugin/dsh-loader`，最低版本为 `2.0.0-dev.45572825995`。
 
 从 GitHub 源安装（已提交构建产物，无需授权构建脚本）：
 
@@ -35,30 +37,31 @@ dsh plugin --profile web add ./dsh-subagent-intro
 
 ## 配置
 
-补丁层按行 `id` 匹配并替换该行的 `config`，不与该行原有配置做深合并。不过缺失的键会由 schema 补上默认值，所以只写你要改的键就够了；下面为了完整展示字段才全部列出：
+插件将配置保存到 `<DSH_HOME>/profiles/<profile>/config/dsh-subagent-intro/config.json`。文件中的 `value` 包含插件配置，`formatVersion` 和 `revision` 由 `dsh-loader` 管理。
 
-```yaml
-- id: subagent-intro
-  config:
-    toolNames:
-      - subagent
-      - subagent_fork
-    announce: true
-    intro: |
-      可委派的子代理模型各有分工，先看下面的能力与适用时机，再选择模型。
-    models:
-      - model: deepseek-flash
-        name: 快速模型
-        provider: mclans-deepseek
-        ability: 快速完成单文件修改、样板代码与格式调整。
-        scenario: 小步改动、批量重命名、配置调整。
-        timing: 需要快速反馈且改动边界清晰时。
-      - model: deep-reasoner
-        name: 深思模型
-        ability: 跨模块设计、疑难缺陷定位与代码审查。
-        scenario: 多文件重构、算法与协议设计。
-        timing: 改动波及多个模块，或需要先做取舍判断时。
+```json
+{
+  "formatVersion": 1,
+  "revision": 1,
+  "value": {
+    "toolNames": ["subagent", "subagent_fork"],
+    "announce": true,
+    "intro": "先看候选模型的能力与适用时机，再选子代理。",
+    "models": [
+      {
+        "model": "deepseek-flash",
+        "name": "快速模型",
+        "provider": "example",
+        "ability": "快速完成单文件修改和格式调整。",
+        "scenario": "小步改动、批量重命名、配置调整。",
+        "timing": "需要快速反馈，且改动边界清晰时。"
+      }
+    ]
+  }
+}
 ```
+
+升级时会读取旧配置并保存到 JSON，确认写入后再清理当前 profile 的 `cordis.patch.yml` 中对应的 `subagent-intro.config`。如果 JSON 已保存过，继续使用其中的配置。迁移保留启用状态和其他插件配置，清理失败时会记录错误并在下次加载时重试。
 
 ### 字段说明
 
@@ -74,19 +77,19 @@ dsh plugin --profile web add ./dsh-subagent-intro
 | `models[].scenario` | `string` | 是 | 列举具体的任务形态与改动规模（如「单文件修改」「跨模块重构」「只读检索」），方便模型按手头任务直接对号入座 |
 | `models[].timing` | `string` | 是 | 给出触发选择或排除该模型的边界条件（如「改动边界已明确时」「任务不要求低延迟时」）和必传参数要求 |
 
-`models` 的条目按配置顺序输出，不排序、不去重。`model`、`ability`、`scenario`、`timing` 缺失时，插件加载阶段会因 schema 校验失败而报错，不会静默丢弃条目。
+`models` 的条目按配置顺序输出。新增草稿条目时，可以逐项填写 `model`、`ability`、`scenario` 和 `timing`。
 
 ## 使用
 
 ### 在 Web 界面编辑
 
-打开「插件」页，点开 `@dsh-plugin/dsh-subagent-intro`，描述下方即为配置区。配置只挂在这一个入口，设置面板的「插件」分页不会多出一个标签页。
+打开「插件」页，点开 `@dsh-plugin/dsh-subagent-intro`，展开「子代理介绍」配置区。
 
 面板可编辑全部字段，包括总述、模型条目（新增、删除、上下移）、工具名与适用声明头开关。输入后约 400ms 自动保存，页面顶部会显示保存状态。如果写入被宿主拒绝或失败，页面上会直接给出原因。
 
 表单占满宿主提供的宽度，不设固定最大宽度。`model` 输入框旁的「选择」按钮会读取宿主已注册的模型目录，支持按名称或 id 过滤后点选。点选后会同时自动填入对应的 `provider`，并在 `name` 为空时补上目录里的展示名。模型目录不可用时，该按钮会禁用并提示原因，此时仍可直接手填任意模型 id。能力、场景、适用时机三个字段为多行输入，各占整行。
 
-四个顶层配置字段都声明为 volatile，在这里改完**无需重启**，下一轮请求即可生效。当然，也可以继续用 YAML 补丁文件配置。
+在页面保存后，下一轮请求即可使用新配置。手动编辑 JSON 文件后，重新加载插件以读取修改。
 
 ### 导入与导出
 

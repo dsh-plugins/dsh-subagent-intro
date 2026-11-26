@@ -1,7 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
+import type { HostAPI } from '@dsh-plugin/dsh-loader'
 import { Config, resolveConfig } from './config.js'
 import type { AssembleContext, PreStepDecision, PreStepPayload, SessionLike } from './host.js'
 import { renderIntroText } from './render.js'
+import { registerSettings } from './settings.js'
 
 export { Config } from './config.js'
 
@@ -11,7 +13,7 @@ export const name = '@dsh-plugin/dsh-subagent-intro'
 /** 位于宿主 TOOL_SUBAGENT(2800) 段落之前，紧邻子代理工具说明。 */
 const SECTION_ORDER = 2790
 
-export const inject = ['systemPrompt', 'tools']
+export const inject = ['systemPrompt', 'tools', 'dshLoader']
 
 /**
  * 判断会话当前生效的系统提示词是否已经包含本段贡献。
@@ -41,14 +43,14 @@ function sessionShowsContribution(session: SessionLike, contribution: string): b
   return false
 }
 
-export function apply(ctx: Context, config: Config): void {
+export async function apply(ctx: Context & { dshLoader: HostAPI }, config: Config): Promise<void> {
+  const readSettings = await registerSettings(ctx, resolveConfig(config))
+
   /**
    * 按作用域内可见的子代理创建工具渲染本段；section 与 pre-step 必须共用同一函数。
-   *
-   * 配置字段是 volatile，每次求值都读当前值，设置页写入后下一轮装配即生效。
    */
   const renderFor = (scope: unknown): string => {
-    const resolved = resolveConfig(config)
+    const resolved = readSettings()
     const visible = resolved.toolNames.filter(tool => ctx.tools.get(tool, scope) !== undefined)
     return renderIntroText(resolved, visible)
   }
